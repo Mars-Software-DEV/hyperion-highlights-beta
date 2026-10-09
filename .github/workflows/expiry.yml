@@ -1,0 +1,43 @@
+# Moves the end date of the betas: replaces beta.json in the release `beta`. The programs read it at start and every
+# few hours, so every beta that is installed follows it (a past date stops them all at once).
+# Run it from Actions, "expiry", Run workflow: the last day of the beta as dd/mm/yyyy (works until 23:59:59 that day,
+# Italian time). The build workflow of the program never changes this date.
+name: expiry
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Last day of the beta, dd/mm/yyyy (for example 30/11/2026)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  expiry:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write beta.json in the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATE: ${{ inputs.date }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$DATE" =~ ^([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})$ ]]; then
+            echo "::error::'$DATE' is not a date: use dd/mm/yyyy (for example 30/11/2026)"; exit 1
+          fi
+          day=$(printf '%02d' "$((10#${BASH_REMATCH[1]}))")
+          month=$(printf '%02d' "$((10#${BASH_REMATCH[2]}))")
+          iso="${BASH_REMATCH[3]}-$month-$day"
+          # a day that does not exist (31/02) makes date fail
+          expires=$(TZ=Europe/Rome date -d "$iso 23:59:59" +%s) || { echo "::error::'$DATE' is not a real date"; exit 1; }
+          echo "{\"expires_at\": $expires}" > beta.json
+          echo "The beta works until $(TZ=Europe/Rome date -d "@$expires" '+%A %d/%m/%Y %H:%M:%S %z')"
+          cat beta.json
+          if [ "$expires" -lt "$(date +%s)" ]; then echo "::warning::that date is in the past: every beta stops working at once"; fi
+          gh release view beta --repo "$GITHUB_REPOSITORY" > /dev/null || { echo "::error::the release beta does not exist yet: publish a beta first"; exit 1; }
+          gh release upload beta beta.json --repo "$GITHUB_REPOSITORY" --clobber
+          echo "### beta.json replaced" >> "$GITHUB_STEP_SUMMARY"
+          echo "Works until \`$iso 23:59:59\` (Italian time): \`$(cat beta.json)\`" >> "$GITHUB_STEP_SUMMARY"
